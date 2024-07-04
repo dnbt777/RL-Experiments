@@ -1,0 +1,27 @@
+tetris thing
+
+text -> tetris animation
+
+components/outline
+
+RL algorithm to play tetris
+
+record runs
+    - include final configuration
+
+
+figure out problem: I have a set of tetris configurations. I can color any of the pieces, as few or as many as I want, in any of the configurations, black.
+I have a bunch of images consisting of white OR black pixels.
+for each image, how do I find a configuration I can color black to match the black pixels?
+    - maybe.. start with the image. make the finished tetris board. have an AI learn to REVERSE PLAY tetris..?
+    -hmm  idk
+
+
+hmm maybe... instead, make the entire image created out of a single game.
+
+
+get runs in the gif
+
+get gif of each run
+
+stitch together

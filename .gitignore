@@ -1,6 +1,10 @@
 *.mcoder-workspace
 *.idea
 *.env
+Trash/
+*.pth
+*/music/
+*/run_saves/
 
 
 # Byte-compiled / optimized / DLL files

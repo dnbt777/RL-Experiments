@@ -1,0 +1,7 @@
+add cool background
+make a graph of all params in paramspace to I can normalize and stuff and see whats going on
+
+make it render every frame (HD), have a mode to output frames to a render/folder
+ - and automatically stitch the audio onto it
+
+train model to be like 100x better
