@@ -89,7 +89,7 @@ class SnakeGame:
             new_head[5] < 0 or new_head[5] >= NUM_GRIDS_U or
             new_head in self.snake):
             self.done = True
-            reward = -1
+            reward = -2
             self.death_type = "wall collision" if new_head not in self.snake else "self collision"
         else:
             self.snake.insert(0, new_head)
@@ -113,7 +113,7 @@ class SnakeGame:
             else:
                 reward -= 0.2
                 self.steps_away_from_apple += 1
-                reward -= self.steps_away_from_apple/100
+                #reward -= self.steps_away_from_apple/100
             self.previous_distance = current_distance
 
             if self.steps_towards_apple + self.steps_away_from_apple > 5000:

@@ -3,8 +3,9 @@
 *.env
 Trash/
 *.pth
-*/music/
-*/run_saves/
+*/music/*
+*/run_saves/*
+*/render_frames/*
 
 
 # Byte-compiled / optimized / DLL files
