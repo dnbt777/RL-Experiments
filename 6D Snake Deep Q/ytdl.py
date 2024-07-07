@@ -36,6 +36,20 @@ def crop_audio(input_file, start_time):
     os.remove(input_file)
     os.rename(output_file, input_file)
 
+def convert_to_ogg(input_file):
+    output_file = os.path.splitext(input_file)[0] + ".ogg"
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-i", input_file,
+        "-c:a", "libvorbis",
+        "-q:a", "4",
+        output_file
+    ]
+    
+    subprocess.run(ffmpeg_cmd, check=True)
+    os.remove(input_file)
+    return output_file
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: python ytdl.py <youtube_url>")
@@ -51,6 +65,9 @@ def main():
         if start_time is not None:
             crop_audio(output_file, start_time)
             print(f"Cropped audio to start at {start_time} seconds")
+        
+        ogg_file = convert_to_ogg(output_file)
+        print(f"Converted to OGG: {ogg_file}")
         
         print("Processing complete!")
     except Exception as e:
