@@ -7,7 +7,7 @@ import numpy as np
 from math import *
 from audio_processor import get_frequency_data
 
-song_path = "music/x.ogg"
+song_path = "music/AoiSangosho.ogg"
 play_song = True
 
 # Load audio and extract features

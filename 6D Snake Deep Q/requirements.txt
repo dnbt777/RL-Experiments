@@ -1,2 +1,8 @@
 pygame
+numpy
+torch
 PyOpenGL
+librosa
+pillow
+pytube
+

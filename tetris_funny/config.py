@@ -1,48 +1,26 @@
 
-import pygame
+# Grid configuration
+GRID_SIZE = 30
+GRID_WIDTH = 10
+GRID_HEIGHT = 20
 
-# Colors
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-BLACK = (0, 0, 0)
+# Window configuration
+TETRIS_WIDTH = GRID_WIDTH * GRID_SIZE
+TETRIS_HEIGHT = GRID_HEIGHT * GRID_SIZE
+WINDOW_WIDTH = TETRIS_WIDTH * 2
+WINDOW_HEIGHT = TETRIS_HEIGHT
 
-# Game settings
-BOARD_WIDTH = 10
-BOARD_HEIGHT = 20
-BLOCK_SIZE = 30
+# Agent params
+BATCH_SIZE = 64
+MEMORY_SIZE = 10000
 
-# Display settings
-SCREEN_WIDTH = BOARD_WIDTH * BLOCK_SIZE
-SCREEN_HEIGHT = BOARD_HEIGHT * BLOCK_SIZE
-
-# Tetromino shapes
-SHAPES = [
-    [[1, 1, 1, 1]],
-    [[1, 1], [1, 1]],
-    [[1, 1, 1], [0, 1, 0]],
-    [[1, 1, 1], [1, 0, 0]],
-    [[1, 1, 1], [0, 0, 1]],
-    [[1, 1, 0], [0, 1, 1]],
-    [[0, 1, 1], [1, 1, 0]]
-]
-
-# RL settings
+# DQN params
+EPSILON_MIN = 0.01
+EPSILON_DECAY = 0.995
 GAMMA = 0.99
 LEARNING_RATE = 0.001
-MEMORY_SIZE = 10000
-BATCH_SIZE = 64
-EXPLORATION_MAX = 1.0
-EXPLORATION_MIN = 0.01
-EXPLORATION_DECAY = 0.995
+TARGET_UPDATE_FREQUENCY = 100
 
-# Training settings
-EPISODES = 10000
-MAX_STEPS = 1000
+SAVE_MODEL_STEPS = 10000
 
-# Inference settings
-NUM_GAMES = 5
-RECORD_FILE = "tetris_gameplay.pkl"
-
-# Pygame initialization
-pygame.init()
-FONT = pygame.font.Font(None, 36)
+RENDER_EVERY = 10 # show the training playing out every n episodes
