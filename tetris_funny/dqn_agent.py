@@ -6,9 +6,10 @@ import numpy as np
 import random
 from collections import deque
 from config import *
+import os
 
 class DQNAgent:
-    def __init__(self, state_shape, action_space):
+    def __init__(self, state_shape, action_space, batch_size=BATCH_SIZE):
         self.state_shape = state_shape
         self.action_space = action_space
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -21,11 +22,13 @@ class DQNAgent:
         self.criterion = nn.MSELoss()
         
         self.memory = deque(maxlen=MEMORY_SIZE)
-        self.batch_size = BATCH_SIZE
+        self.batch_size = batch_size
         self.gamma = GAMMA
         self.epsilon = 1.0
         self.epsilon_min = EPSILON_MIN
         self.epsilon_decay = EPSILON_DECAY
+        self.total_steps = 0
+        self.steps_since_last_save = 0
         self.total_steps = 0
 
     def get_action(self, state):
@@ -43,9 +46,10 @@ class DQNAgent:
             return self.idx_to_action(action_idx)
         
 
-    def train(self, state, action, reward, next_state, done):
+    def store_experience(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
-        
+
+    def train(self):
         if len(self.memory) < self.batch_size:
             return
         
@@ -70,6 +74,12 @@ class DQNAgent:
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
         self.total_steps += 1
+        self.steps_since_last_save += 1
+        if self.steps_since_last_save >= SAVE_MODEL_STEPS:
+            self.save_model_checkpoint()
+            self.steps_since_last_save = 0
+
+        self.total_steps += 1
         if self.total_steps % SAVE_MODEL_STEPS == 0:
             self.save_model_checkpoint()
 
@@ -85,13 +95,25 @@ class DQNAgent:
         
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
+
+    def save_model_checkpoint(self):
+        if not os.path.exists('model_checkpoints'):
+            os.makedirs('model_checkpoints')
+        checkpoint = {
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'epsilon': self.epsilon,
+            'total_steps': self.total_steps
+        }
+        torch.save(checkpoint, f'model_checkpoints/model_step_{self.total_steps}.pth')
+        print(f"Model weights saved at {self.total_steps} steps")
         
     def preprocess_state(self, state):
         grid = torch.tensor(state['grid'], dtype=torch.float32).unsqueeze(0)
         canvas = torch.tensor(state['canvas'], dtype=torch.float32).unsqueeze(0)
         
         current_piece = torch.zeros((1, self.state_shape[1], self.state_shape[2]), dtype=torch.float32)
-        if state['current_piece']:
+        if state['current_piece'] and state['current_piece']['shape']:
             shape = state['current_piece']['shape']
             x, y = state['current_piece']['x'], state['current_piece']['y']
             color = state['current_piece']['color']
@@ -101,11 +123,12 @@ class DQNAgent:
                         current_piece[0, y+i, x+j] = color
         
         next_piece = torch.zeros((1, self.state_shape[1], self.state_shape[2]), dtype=torch.float32)
-        shape = state['next_piece']
-        for i in range(len(shape)):
-            for j in range(len(shape[0])):
-                if shape[i][j]:
-                    next_piece[0, i, j] = 1
+        if state['next_piece']:
+            shape = state['next_piece']
+            for i in range(len(shape)):
+                for j in range(len(shape[0])):
+                    if shape[i][j]:
+                        next_piece[0, i, j] = 1
         
         state_tensor = torch.cat([grid, canvas, current_piece, next_piece], dim=0).unsqueeze(0)
         return state_tensor.to(self.device)
@@ -153,7 +176,7 @@ class DQN(nn.Module):
         x = self.fc2(x)
         return x
 
-def create_dqn_agent(grid_width, grid_height):
+def create_dqn_agent(grid_width, grid_height, batch_size=BATCH_SIZE):
     state_shape = (4, grid_height, grid_width)  # 4 channels: grid, canvas, current_piece, next_piece
     action_space = 18  # 3 rotate * 3 move * 2 color
-    return DQNAgent(state_shape, action_space)
+    return DQNAgent(state_shape, action_space, batch_size=BATCH_SIZE)

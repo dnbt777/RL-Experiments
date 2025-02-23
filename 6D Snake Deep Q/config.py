@@ -7,7 +7,7 @@ import numpy as np
 from math import *
 from audio_processor import get_frequency_data
 
-song_path = "music/AoiSangosho.ogg"
+song_path = "music/usandthem.ogg"
 play_song = True
 
 # Load audio and extract features
@@ -49,6 +49,20 @@ class ParamSpace:
         print('loading frequency data')
         self.stft_mag, self.time_axis, self.freq_axis, _, _ = get_frequency_data(song_path)
 
+
+    def get_mfccs(self, t):
+        idx = np.searchsorted(self.t_features, t, side="right") - 1
+        return self.mfccs[:, idx]
+
+    def get_freq_data(self, t):
+        idx = np.searchsorted(self.time_axis, t, side="right") - 1
+        print(idx)
+        print()
+        return self.stft_mag[:, idx]
+
+    def get_avg_freq_data(self, t):
+        freq_data = self.get_freq_data(t)
+        return np.mean(freq_data)
 
     def update(self):
         self.time = time.time() - self.sim_start
@@ -94,20 +108,6 @@ class ParamSpace:
             print(f"Warning: Invalid index {idx} for formants at time {t}")
             return np.zeros(8)  # Return an array of zeros with the same shape as formants
         return self.formants[idx]
-
-    def get_mfccs(self, t):
-        idx = np.searchsorted(self.t_features, t, side="right") - 1
-        return self.mfccs[:, idx]
-
-    def get_freq_data(self, t):
-        idx = np.searchsorted(self.time_axis, t, side="right") - 1
-        print(idx)
-        print()
-        return self.stft_mag[:, idx]
-
-    def get_avg_freq_data(self, t):
-        freq_data = self.get_freq_data(t)
-        return np.mean(freq_data)
 
 
 MODEL_SAVE_INTERVAL = 100000 # steps
@@ -155,8 +155,8 @@ APPLE_COUNT = 10
 # Define ZOOM and ROT1 as functions
 def get_zoom(param_space):
     t = param_space.get_time()
-    amplitude = param_space.get_amplitude(t)
-    rms = param_space.get_rms(t)
+    #amplitude = param_space.get_amplitude(t)
+    #rms = param_space.get_rms(t)
     #zoom = max(100*(1+sin(t)/8), 100*(1+sin(t)/8) + 15 * np.tanh(2 * rms) + 20 * np.tanh(3 * amplitude))
     zoom = 90 + 30*param_space.get_avg_freq_data(t)
     print(t, zoom)
