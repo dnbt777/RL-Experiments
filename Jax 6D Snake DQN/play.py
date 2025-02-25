@@ -15,7 +15,8 @@ for i in range(100):
   print(grid)
 
   # get action from user/model
-  action_batch = int(input("Enter action: (u/d/l/r 0,1,2,3)")) * jnp.ones((batchsize,), dtype=int)
+  action = dict(zip("wsad", range(4)))[input("WASD:")]
+  action_batch = int(action) * jnp.ones((batchsize,), dtype=int)
 
   # get next game state
   transition_step_batch = update_game_state_batched(game_state_batch, action_batch)

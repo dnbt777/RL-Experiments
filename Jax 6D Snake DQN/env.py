@@ -1,4 +1,5 @@
 from typing import NamedTuple, List, Tuple
+import functools
 import jax.numpy as jnp
 import jax.random as jrand
 import jax
@@ -12,19 +13,21 @@ import time
 
 # Structure of Arrays
 # batched env state => extremely parallelized env
-class GameState(NamedTuple):
-    apples : jax.Array
-    apple_count : int
-    snake_tail : jax.Array
-    snake_tail_length : int
-    snake_head : jax.Array
-
 class GameStateBatch(NamedTuple):
     apples : jax.Array
-    apple_count : List[int]
+    apple_count : jax.Array
     snake_tail : jax.Array
-    snake_tail_length : List[int]
+    snake_tail_length : jax.Array
     snake_head : jax.Array
+
+# TransitionStep = Tuple(game_state, action, reward, next_state, finished)
+# TransitionStepBatch = Tuple(game_state_batch, action_batch, reward_batch, next_state_batch, finished_batch)
+class TransitionStepBatch(NamedTuple):
+    state_batch: GameStateBatch
+    action: jax.Array
+    reward: jax.Array
+    next_state: GameStateBatch
+    finished: jax.Array
 
 ## env.py
 # 2D grid
@@ -32,7 +35,7 @@ class GameStateBatch(NamedTuple):
 BATCH_SIZE = 128
 HEIGHT = 10
 WIDTH = 10
-APPLE_COUNT = 5 # for now.. keep constant
+APPLE_COUNT = 17 # for now.. keep constant
 DIRECTIONS = jnp.array([
   [-1, 0], # up
   [1, 0],  # down
@@ -41,50 +44,7 @@ DIRECTIONS = jnp.array([
   ])
 
 
-def init_game_state(
-    key,
-    height: int = HEIGHT,
-    width: int = WIDTH,
-    apple_count: int = APPLE_COUNT
-    ) -> GameState:
-  total_cells : int = height*width
-  # randomly spawn apples and player
-  spawn_cell_indices = jrand.choice(key, total_cells, (apple_count + 1,), replace=False)
-  # apples
-  apple_indices = spawn_cell_indices[1:]
-  apple_rows = apple_indices // width
-  apple_columns = apple_indices % width
-  apples = jnp.stack([apple_rows, apple_columns], axis=-1, dtype=int)
-  # player
-  max_snake_len = total_cells
-  snake_tail = -jnp.ones((max_snake_len - 1, 2), dtype=int)
-  snake_head_index = spawn_cell_indices[0]
-  snake_head_row = snake_head_index // width
-  snake_head_column = snake_head_index % width
-  snake_head = jnp.array([snake_head_row, snake_head_column], dtype=int)
-
-  state = GameState(
-    apples = apples,
-    apple_count = apple_count,
-    snake_tail = snake_tail,
-    snake_tail_length = 0,
-    snake_head = snake_head,
-  )
-  return state
-
-
-# converts an array of structs into a struct of arrays
-# useful for creating SoAs whose attributes jax can easily batch over
-def aos_to_soa(aos: GameState) -> GameStateBatch:
-  soa = jax.tree_util.tree_map(lambda *attr: jnp.stack(attr), aos)
-  return soa
-
-# converts soa to aos
-# useful for replay buffer
-def soa_to_aos(soa: GameStateBatch) -> GameState:
-  return jax.vmap(GameState)(soa)
-
-
+@functools.partial(jax.jit, static_argnames=["height", "width", "apple_count", "batchsize"])
 def init_game_state_batch(
     key,
     batchsize: int = BATCH_SIZE,
@@ -92,120 +52,154 @@ def init_game_state_batch(
     width: int = WIDTH,
     apple_count: int = APPLE_COUNT
     ) -> GameStateBatch:
-  keys = jrand.split(key, batchsize)
-  game_states_aos = jax.vmap(init_game_state, in_axes=(0, None, None, None))(keys, height, width, apple_count) # array of structures
-  game_states_soa = aos_to_soa(game_states_aos)
-  return game_states_soa
+  total_cells: int = height*width
+  # randomly spawn apples and player
+  batch_keys = jrand.split(key, batchsize)
+  spawn_cell_indices = jax.vmap(jrand.choice, in_axes=(0, None, None))(batch_keys, total_cells, (apple_count + 1,))
+  # apples
+  apple_indices = spawn_cell_indices[:, 1:]
+  apple_rows = apple_indices // width
+  apple_columns = apple_indices % width
+  apples = jnp.stack([apple_rows, apple_columns], axis=-1, dtype=int)
+  # player
+  max_snake_len = total_cells
+  snake_tail = -jnp.ones((batchsize, max_snake_len - 1, 2), dtype=int)
+  snake_head_index = spawn_cell_indices[:, 0]
+  snake_head_rows = snake_head_index // width
+  snake_head_columns = snake_head_index % width
+  snake_head = jnp.stack([snake_head_rows, snake_head_columns], axis=-1, dtype=int)
+
+  state_batch = GameStateBatch(
+    apples = apples,
+    apple_count = apple_count * jnp.ones((batchsize,), dtype=int),
+    snake_tail = snake_tail,
+    snake_tail_length = jnp.zeros((batchsize,), dtype=int),
+    snake_head = snake_head,
+  )
+  return state_batch
 
 
-def cell_is_deadly(
-    game_state: GameState,
-    cell: jax.Array,
+@functools.partial(jax.jit, static_argnames=["height", "width"])
+def cell_is_deadly_batched(
+    game_state_batch: GameStateBatch, # (batch, *) SoA
+    cell_batch: jax.Array, # (batch, 2)
     height: int = HEIGHT,
     width: int = WIDTH
   ) -> bool:
   # cell is in tail -> death
-  cell_is_in_tail = jnp.all(cell == game_state.snake_tail, axis=-1)
+  cell_is_in_tail = jnp.all(cell_batch[:, jnp.newaxis, :] == game_state_batch.snake_tail, axis=-1)
   # cell collides with wall -> death
-  cell_is_in_wall = jnp.array([
-    cell[0] < 0,
-    cell[0] >= width,
-    cell[1] < 0,
-    cell[1] >= height
-  ])
-  is_deadly = jnp.any(jnp.concatenate([cell_is_in_tail, cell_is_in_wall]))
+  cell_is_in_wall = jnp.swapaxes(jnp.array([
+    cell_batch[:, 0] < 0,
+    cell_batch[:, 0] >= width,
+    cell_batch[:, 1] < 0,
+    cell_batch[:, 1] >= height
+  ]), 0, 1)
+  is_deadly = jnp.any(jnp.concatenate([cell_is_in_tail, cell_is_in_wall], axis=-1), axis=-1)
   return is_deadly
 
 
 # update grid (state, move)
 # returns: state, reward, finished
-def update_game_state(
-    game_state: GameState,
-    action: int,
-    height: int = HEIGHT,
-    width: int = WIDTH
-    ) -> Tuple[GameState, float, bool]:
+@jax.jit
+def update_game_state_batched(
+    game_state_batch: GameStateBatch,
+    action_batch: jax.Array,
+    ) -> TransitionStepBatch:
   ## init action:
   # 0, 1, 2, 3 => up, down, left, right
-  direction = DIRECTIONS[action]
-
-  ### process current state
-  ### move the snake, check for death, check for apples.
+  direction_batch = DIRECTIONS[action_batch]
 
   ## init reward
-  reward = 0.1 # for surviving
-  finished = False # False by default
+  reward_batch = jnp.ones_like(action_batch, dtype=jnp.float16) * 0.1 # for surviving
+  finished_batch = jnp.zeros_like(action_batch, dtype=bool) # False by default
 
   ## update snake
   # update head
-  new_snake_head = game_state.snake_head + direction
+  new_snake_head = game_state_batch.snake_head + direction_batch
   # update snake body/tail - set last index to new
-  new_snake_tail = game_state.snake_tail.at[game_state.snake_tail_length].set(game_state.snake_head)
+  new_snake_tail = game_state_batch.snake_tail.at[:, game_state_batch.snake_tail_length].set(game_state_batch.snake_head)
   # new head touches apple -> :D
-  eaten_apples = jnp.all(new_snake_head == game_state.apples, axis=1)
-  if jnp.any(eaten_apples):
-    reward += 1
-    new_apples = game_state.apples.at[eaten_apples].set(jnp.array([0, 0])) # just reset it to 0, 0 for now idk
-    new_snake_tail_length = game_state.snake_tail_length + 1
-    # TODO add new apple randomly
-  else:
-    # get rid of tail if the snake didnt eat an apple
-    # wait, since when do snakes eat apples?
-    new_snake_tail = jnp.roll(new_snake_tail, -1, axis=0).at[-1].set(jnp.array([-1, -1]))
-    new_snake_tail_length = game_state.snake_tail_length
-    # apples are unchanged
-    new_apples = game_state.apples
+  eaten_apples = jnp.all(new_snake_head[:, jnp.newaxis, :] == game_state_batch.apples, axis=-1)
 
   ## rewards/punishments:
-  # new head collides with tail -> death
-  if cell_is_deadly(game_state, new_snake_head):
-    finished = True
-    reward -= 10
+  # snake ate an apple
+  snake_ate_apple = jnp.any(eaten_apples, axis=-1) # (batch,)
+  reward_batch = reward_batch + 1*snake_ate_apple
+  new_apples = jnp.where(
+    eaten_apples[:, :, jnp.newaxis],
+    jnp.zeros_like(game_state_batch.apples),
+    game_state_batch.apples,
+  ) # just reset it to 0, 0 for now idk
+  new_snake_tail_length = game_state_batch.snake_tail_length + 1*snake_ate_apple
 
-  next_state = GameState(
+  # get rid of tail's tip if the snake didnt eat an apple
+  # use rolling and jnp.where for this
+  # wait, since when do snakes eat apples?
+  rolled_snake_tail = jnp.roll(new_snake_tail, -1, axis=1).at[:, -1].set(jnp.array([-1, -1])) # batch, tail_length, coords. roll along tail len dim
+  new_snake_tail = jnp.where(
+     snake_ate_apple[:, jnp.newaxis, jnp.newaxis],
+     new_snake_tail,
+     rolled_snake_tail
+  )
+
+  
+  # new head collides with tail -> death
+  snake_died = cell_is_deadly_batched(game_state_batch, new_snake_head)
+  finished_batch = jnp.logical_or(finished_batch, snake_died)
+  reward_batch = reward_batch - 10*snake_died
+
+  
+  next_state_batch = GameStateBatch(
     apples = new_apples,
-    apple_count = game_state.apple_count,
+    apple_count = game_state_batch.apple_count,
     snake_tail = new_snake_tail,
     snake_tail_length = new_snake_tail_length,
     snake_head = new_snake_head,
   )
-  return next_state, reward, finished
+
+  transition_step_batch = TransitionStepBatch(
+    state_batch=game_state_batch,
+    action=action_batch,
+    reward=reward_batch,
+    next_state=next_state_batch,
+    finished=finished_batch
+
+  )
+  return transition_step_batch
 
 
-def update_game_state_batch(
+# gets the grid of a batch of gamestates
+def get_grid_batched(
     game_state_batch: GameStateBatch,
-    actions: List[int],
-    height: int = HEIGHT,
-    width: int = WIDTH
-    ) -> Tuple[GameStateBatch, List[float], List[bool]]:
-  return jax.vmap(update_game_state, in_axes=(0, 0, None, None))(game_state_batch, actions, height, width) # mypy doesnt understand vmap
-
-
-def get_grid(
-    game_state: GameState,
     height: int = HEIGHT,
     width: int = WIDTH
     ) -> jax.Array:
-  grid = jnp.zeros((width, height))
+  batchsize = game_state_batch.apples.shape[0]
+  grid_batch = jnp.zeros((batchsize, width, height))
   # set head cell to 1
-  head_row, head_col = game_state.snake_head[0], game_state.snake_head[1]
-  grid = grid.at[head_row, head_col].set(1)
+  head_rows, head_cols = game_state_batch.snake_head[:, 0], game_state_batch.snake_head[:, 1] # batch,
+  head_batch_index = jnp.arange(head_rows.shape[0])
+  grid_batch = grid_batch.at[head_batch_index, head_rows, head_cols].set(1)
   # set tail cells to 2
-  tail_cell_mask = jnp.all(game_state.snake_tail != -1, axis=1)
-  tail_cells = game_state.snake_tail[tail_cell_mask]
-  tail_rows, tail_columns = tail_cells[:, 0], tail_cells[:, 1]
-  grid = grid.at[tail_rows, tail_columns].set(2)
+  tail_cell_mask = jnp.all(game_state_batch.snake_tail != -1, axis=-1)
+  tail_rows, tail_columns = game_state_batch.snake_tail[:, :, 0], game_state_batch.snake_tail[:, :, 1] # batch, tail, coords
+  tail_rows, tail_columns = tail_rows[tail_cell_mask], tail_columns[tail_cell_mask]
+  tail_cell_batch_index = jnp.arange(tail_cell_mask.shape[0])
+  grid_batch = grid_batch.at[tail_cell_mask].set(2)
   # set apple cells to 3
-  apple_rows, apple_columns = game_state.apples[:, 0], game_state.apples[:, 1]
-  grid = grid.at[apple_rows, apple_columns].set(3)
-  return grid
+  apple_rows, apple_columns = game_state_batch.apples[:, :, 0], game_state_batch.apples[:, :, 1] # batch, apple, coords
+  apple_batch_index = jnp.arange(apple_rows.shape[0]) # redundant. same batchsize for all, so batch_index can just be used.
+  grid_batch = grid_batch.at[apple_batch_index[:, jnp.newaxis], apple_rows, apple_columns].set(3)
+  return grid_batch
 
 
+# for batched sims
+# write _batched functions
+# use a SoA
+# do not use vmap except where necessary
+# writing unbatched functions and vmapping them feels like a poor design choice
 
 
-
-
-
-
-
-
+# no jax.jit:     steps/s:  952.99
+# after jax.jit:  steps/s:  46303.45

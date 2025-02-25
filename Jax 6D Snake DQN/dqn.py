@@ -40,7 +40,7 @@ def init_mlp_dqn(
     ) # mypy doesn't understand SoA with List type D:
   )
 
-
+@jax.jit
 def mlp_forward(mlp_params: MLPParams, x: jax.Array) -> jax.Array:
   # project to hidden size
   x = jax.nn.relu(x @ mlp_params.wi + mlp_params.bi)
@@ -53,23 +53,28 @@ def mlp_forward(mlp_params: MLPParams, x: jax.Array) -> jax.Array:
   return x
 
 
-def get_model_vision(game_state : GameState) -> jax.Array:
+@jax.jit
+def get_model_vision_batched(game_state_batch : GameStateBatch) -> jax.Array:
   # get direction towards first apple in the list
-  relative_apple_direction = jnp.sign(game_state.apples[0] - game_state.snake_head)
+  relative_apple_direction = jnp.sign(game_state_batch.apples[:, 0] - game_state_batch.snake_head)
   # which directions cause death?
-  cells_around_snake_head = jnp.array([game_state.snake_head + direction for direction in DIRECTIONS]) # probably a more elegant, jax-esque way to do this
-  deadly_direction_mask = jax.vmap(lambda cell: cell_is_deadly(game_state, cell), in_axes=0)(cells_around_snake_head)
+  batch_size = game_state_batch.snake_head.shape[0]
+  cells_around_snake_head_batch = jnp.tile(game_state_batch.snake_head, 4).reshape(batch_size, 4, 2) + DIRECTIONS
+  deadly_directions_batch = jax.vmap(cell_is_deadly_batched, in_axes=(None, 1))(game_state_batch, cells_around_snake_head_batch)
+  deadly_directions_batch = jnp.transpose(deadly_directions_batch)
+  
   # concat and return what the model can see
-  model_vision = jnp.concat([relative_apple_direction, deadly_direction_mask])
+  model_vision = jnp.concat([relative_apple_direction, deadly_directions_batch], axis=-1)
   return model_vision
 
 
-def get_action_qualities(
+@functools.partial(jax.jit, static_argnames=["dtype"])
+def get_action_qualities_batched(
     model_params: MLPParams,
-    game_state: GameState,
+    game_state_batched: GameStateBatch,
     dtype=MODEL_DTYPE
     ) -> jax.Array:
-  model_vision = get_model_vision(game_state)
+  model_vision = get_model_vision_batched(game_state_batched)
   model_input = jnp.array(model_vision, dtype=dtype)
   qualities = mlp_forward(model_params, model_input)
   return qualities
@@ -77,24 +82,28 @@ def get_action_qualities(
 
 # take_action(model_params, state)
 # returns: action
-def take_action(
+@functools.partial(jax.jit, static_argnames=["dtype", "epsilon"])
+def take_action_batched(
     model_params: MLPParams,
-    game_state: GameState,
+    game_state_batch: GameStateBatch,
     key: jax.Array,
     epsilon: float = 0,
     dtype=MODEL_DTYPE
-    ) -> int:
-  qualities = get_action_qualities(model_params, game_state, dtype=dtype)
-  # ITS NOT LEARNING BC MY KEY ISNT ROLLING
-  rand_chance = jrand.uniform(key, shape=(1,))[0]
-  if rand_chance < epsilon:
-    key, _ = jrand.split(key, 2)
-    action = jrand.randint(key, (1,), 0, qualities.shape[0])[0]
-  else:
-    action = jnp.argmax(qualities) # ignore key for now
-  return action
+    ) -> jax.Array:
+  qualities_batch = get_action_qualities_batched(model_params, game_state_batch, dtype=dtype)
+
+  batch_size = game_state_batch.snake_head.shape[0]
+  action_count = qualities_batch.shape[-1]
+  rand_chance_batch = jrand.uniform(key, shape=(batch_size,))
+  key, _ = jrand.split(key, 2)
+  action_batch = jnp.where(
+    rand_chance_batch < epsilon,
+    jrand.randint(key, (batch_size,), minval=0, maxval=action_count), # maxval is exclusive here
+    jnp.argmax(qualities_batch, axis=-1)
+  )
+  return action_batch
 
 
-
+@jax.jit
 def mse(yhat, y):
-  return jnp.mean(jnp.array(y)**2 - jnp.array(yhat)**2)
+  return jnp.mean((jnp.array(y) - jnp.array(yhat))**2)
