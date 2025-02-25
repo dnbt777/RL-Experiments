@@ -17,7 +17,7 @@ class MLPParams(NamedTuple):
   bo: jax.Array
   hidden_layers: List[HiddenLayer]
 
-MODEL_DTYPE=jnp.float16
+MODEL_DTYPE=jnp.float32 # float16 would be better. or bf16
 
 
 def init_mlp_dqn(
@@ -56,6 +56,7 @@ def mlp_forward(mlp_params: MLPParams, x: jax.Array) -> jax.Array:
 @jax.jit
 def get_model_vision_batched(game_state_batch : GameStateBatch) -> jax.Array:
   # get direction towards first apple in the list
+  # ### TODO INVESTIGATE IF THIS REALLY WORKS (test it?)
   relative_apple_direction = jnp.sign(game_state_batch.apples[:, 0] - game_state_batch.snake_head)
   # which directions cause death?
   batch_size = game_state_batch.snake_head.shape[0]

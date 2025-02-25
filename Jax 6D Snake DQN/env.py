@@ -24,15 +24,15 @@ class GameStateBatch(NamedTuple):
 # TransitionStepBatch = Tuple(game_state_batch, action_batch, reward_batch, next_state_batch, finished_batch)
 class TransitionStepBatch(NamedTuple):
     state_batch: GameStateBatch
-    action: jax.Array
-    reward: jax.Array
-    next_state: GameStateBatch
-    finished: jax.Array
+    action_batch: jax.Array
+    reward_batch: jax.Array
+    next_state_batch: GameStateBatch
+    finished_batch: jax.Array
 
 ## env.py
 # 2D grid
 # 0 is empty, 1 is snake head, 2 is snake body, 3 is apple
-BATCH_SIZE = 128
+BATCH_SIZE = 2048
 HEIGHT = 10
 WIDTH = 10
 APPLE_COUNT = 17 # for now.. keep constant
@@ -85,7 +85,7 @@ def cell_is_deadly_batched(
     cell_batch: jax.Array, # (batch, 2)
     height: int = HEIGHT,
     width: int = WIDTH
-  ) -> bool:
+  ) -> jax.Array:
   # cell is in tail -> death
   cell_is_in_tail = jnp.all(cell_batch[:, jnp.newaxis, :] == game_state_batch.snake_tail, axis=-1)
   # cell collides with wall -> death
@@ -160,10 +160,10 @@ def update_game_state_batched(
 
   transition_step_batch = TransitionStepBatch(
     state_batch=game_state_batch,
-    action=action_batch,
-    reward=reward_batch,
-    next_state=next_state_batch,
-    finished=finished_batch
+    action_batch=action_batch,
+    reward_batch=reward_batch,
+    next_state_batch=next_state_batch,
+    finished_batch=finished_batch
 
   )
   return transition_step_batch
@@ -186,7 +186,8 @@ def get_grid_batched(
   tail_rows, tail_columns = game_state_batch.snake_tail[:, :, 0], game_state_batch.snake_tail[:, :, 1] # batch, tail, coords
   tail_rows, tail_columns = tail_rows[tail_cell_mask], tail_columns[tail_cell_mask]
   tail_cell_batch_index = jnp.arange(tail_cell_mask.shape[0])
-  grid_batch = grid_batch.at[tail_cell_mask].set(2)
+  if tail_rows.shape[0] > 0:
+    grid_batch = grid_batch.at[tail_cell_batch_index, tail_rows, tail_columns].set(2)
   # set apple cells to 3
   apple_rows, apple_columns = game_state_batch.apples[:, :, 0], game_state_batch.apples[:, :, 1] # batch, apple, coords
   apple_batch_index = jnp.arange(apple_rows.shape[0]) # redundant. same batchsize for all, so batch_index can just be used.
