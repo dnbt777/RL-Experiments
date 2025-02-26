@@ -28,7 +28,7 @@ def init_mlp_dqn(
     hidden_layer_size: int,
     dtype=MODEL_DTYPE
     ) -> MLPParams:
-  initializer = jax.nn.initializers.glorot_uniform()
+  initializer = jax.nn.initializers.xavier_uniform()
   return MLPParams(
     wi=initializer(key, (input_size, hidden_layer_size), dtype=dtype),
     bi=jnp.zeros((hidden_layer_size,), dtype=dtype),
@@ -38,7 +38,7 @@ def init_mlp_dqn(
       w=hidden_layers * initializer(key, (hidden_layers, hidden_layer_size, hidden_layer_size), dtype=dtype), # batched SoA, will be scanned across
       b=jnp.zeros((hidden_layers, hidden_layer_size), dtype=dtype)
     ) # mypy doesn't understand SoA with List type D:
-  )
+  ) # or I am missing something.
 
 @jax.jit
 def mlp_forward(mlp_params: MLPParams, x: jax.Array) -> jax.Array:
@@ -46,7 +46,7 @@ def mlp_forward(mlp_params: MLPParams, x: jax.Array) -> jax.Array:
   x = jax.nn.relu(x @ mlp_params.wi + mlp_params.bi)
   # scan through hidden layers
   # scanf :: carry -> input_i -> carry -> output_i
-  scanf = lambda _x, hidden_layer: (jax.nn.relu(_x @ hidden_layer.w + hidden_layer.b), None)
+  scanf = lambda _x, hidden_layer: (jax.nn.tanh(_x @ hidden_layer.w + hidden_layer.b), None)
   x, _ = jax.lax.scan(scanf, x, mlp_params.hidden_layers)
   # project to output size
   x = jax.nn.relu(x @ mlp_params.wo + mlp_params.bo)
@@ -56,7 +56,6 @@ def mlp_forward(mlp_params: MLPParams, x: jax.Array) -> jax.Array:
 @jax.jit
 def get_model_vision_batched(game_state_batch : GameStateBatch) -> jax.Array:
   # get direction towards first apple in the list
-  # ### TODO INVESTIGATE IF THIS REALLY WORKS (test it?)
   relative_apple_direction = jnp.sign(game_state_batch.apples[:, 0] - game_state_batch.snake_head)
   # which directions cause death?
   batch_size = game_state_batch.snake_head.shape[0]
@@ -88,7 +87,7 @@ def take_action_batched(
     model_params: MLPParams,
     game_state_batch: GameStateBatch,
     key: jax.Array,
-    epsilon: float = 0,
+    epsilon: float = 1.0,
     dtype=MODEL_DTYPE
     ) -> jax.Array:
   qualities_batch = get_action_qualities_batched(model_params, game_state_batch, dtype=dtype)
