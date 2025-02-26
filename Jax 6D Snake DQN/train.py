@@ -100,6 +100,72 @@ def train_transition_minibatch(
     return model_params, loss, grads
 
 
+@functools.partial(jax.jit, static_argnames=["epsilon", "steps"])
+def generate_replays(
+        replay_buffer,
+        model_params,
+        game_state_batch,
+        rolling_key,
+        steps,
+        epsilon=0.9
+        ) -> Tuple[ReplayBuffer, GameStateBatch, jax.Array, jax.Array, jax.Array]:
+    mean_rewards = jnp.zeros((steps,))
+    numbers_dead = jnp.zeros((steps,))
+    mean_scores = jnp.zeros((steps,))
+    # jitting this for-loop will make compilation time slower and increase memory
+    # but this is better than not jitting this code, which is bottlenecking training
+    # TODO: turn the for-loop into a scan
+    for step in range(steps):
+        # Take an action step
+        rolling_key, _ = jrand.split(rolling_key, 2)
+        action_batch = take_action_batched(model_params, game_state_batch, rolling_key, epsilon=epsilon)
+        # get next state
+        # get action, reward(q)
+        rolling_key, _ = jrand.split(rolling_key, 2)
+        transition_step_batch = update_game_state_batched(rolling_key, game_state_batch, action_batch)
+        # store in replay buffer
+        replay_buffer = append_replay_buffer(replay_buffer, transition_step_batch) # roll and append to end
+        # update game state
+        game_state_batch = transition_step_batch.next_state_batch
+        # replace finished game states with new ones
+        rolling_key, _ = jrand.split(rolling_key, 2)
+        fresh_game_state_batch = init_game_state_batch(rolling_key)
+        game_state_batch = GameStateBatch(
+            apples = jnp.where(
+                transition_step_batch.finished_batch[:, jnp.newaxis, jnp.newaxis],
+                fresh_game_state_batch.apples,
+                game_state_batch.apples
+            ),
+            score = jnp.where(
+                transition_step_batch.finished_batch[:],
+                fresh_game_state_batch.score,
+                game_state_batch.score
+            ),
+            snake_head = jnp.where(
+                transition_step_batch.finished_batch[:, jnp.newaxis],
+                fresh_game_state_batch.snake_head,
+                game_state_batch.snake_head
+            ),
+            snake_tail = jnp.where(
+                transition_step_batch.finished_batch[:, jnp.newaxis, jnp.newaxis],
+                fresh_game_state_batch.snake_tail,
+                game_state_batch.snake_tail
+            ),
+            snake_tail_length = jnp.where(
+                transition_step_batch.finished_batch[:],
+                fresh_game_state_batch.snake_tail_length,
+                game_state_batch.snake_tail_length
+            )
+        ) # clunky. optimize manually, or jit so the compiler can attempt to optimize this (update: jitted)
+        mean_reward = jnp.mean(transition_step_batch.reward_batch)
+        mean_rewards = mean_rewards.at[step].set(mean_reward)
+        mean_score = jnp.mean(transition_step_batch.state_batch.score)
+        mean_scores = mean_scores.at[step].set(mean_score)
+        number_dead = jnp.sum(transition_step_batch.finished_batch)
+        numbers_dead = numbers_dead.at[step].set(number_dead)
+    return replay_buffer, game_state_batch, mean_rewards, numbers_dead, mean_scores
+
+
 
 ## TRAIN LOOP SETUP
 rolling_key = jrand.PRNGKey(0)
@@ -150,66 +216,23 @@ for train_loop_iteration in range(train_loop_iterations):
         rolling_key, _ = jrand.split(rolling_key, 2)
         transition_step_batch = update_game_state_batched(rolling_key, game_state_batch, action_batch)
         replay_buffer: ReplayBuffer = init_replay_buffer(replay_buffer_size, transition_step_batch)
-    # generate transition steps
+    # start the timer
     start_time = time.time()
     if train_loop_iteration == 0:
         steps = replay_buffer_size # fill replay buffer first
     else:
         steps = play_steps_per_iteration
-    #replay_buffer = generate_replays(replay_buffer, model_params, game_state_batch, rolling_key, epsilon=epsilon)
-    mean_rewards = jnp.zeros((steps,))
-    numbers_dead = jnp.zeros((steps,))
-    mean_scores = jnp.zeros((steps,))
-    for step in range(steps):
-        # Take an action step
-        rolling_key, _ = jrand.split(rolling_key, 2)
-        action_batch = take_action_batched(model_params, game_state_batch, rolling_key, epsilon=epsilon)
-        # get next state
-        # get action, reward(q)
-        rolling_key, _ = jrand.split(rolling_key, 2)
-        transition_step_batch = update_game_state_batched(rolling_key, game_state_batch, action_batch)
-        # store in replay buffer
-        replay_buffer = append_replay_buffer(replay_buffer, transition_step_batch) # roll and append to end
-        # update game state
-        game_state_batch = transition_step_batch.next_state_batch
-        # replace finished game states with new ones
-        rolling_key, _ = jrand.split(rolling_key, 2)
-        fresh_game_state_batch = init_game_state_batch(rolling_key)
-        game_state_batch = GameStateBatch(
-            apples = jnp.where(
-                transition_step_batch.finished_batch[:, jnp.newaxis, jnp.newaxis],
-                fresh_game_state_batch.apples,
-                game_state_batch.apples
-            ),
-            score = jnp.where(
-                transition_step_batch.finished_batch[:],
-                fresh_game_state_batch.score,
-                game_state_batch.score
-            ),
-            snake_head = jnp.where(
-                transition_step_batch.finished_batch[:, jnp.newaxis],
-                fresh_game_state_batch.snake_head,
-                game_state_batch.snake_head
-            ),
-            snake_tail = jnp.where(
-                transition_step_batch.finished_batch[:, jnp.newaxis, jnp.newaxis],
-                fresh_game_state_batch.snake_tail,
-                game_state_batch.snake_tail
-            ),
-            snake_tail_length = jnp.where(
-                transition_step_batch.finished_batch[:],
-                fresh_game_state_batch.snake_tail_length,
-                game_state_batch.snake_tail_length
-            )
-        ) # clunky. optimize manually, or jit so the compiler can attempt to optimize this
-        mean_reward = jnp.mean(transition_step_batch.reward_batch)
-        mean_rewards = mean_rewards.at[step].set(mean_reward)
-        mean_score = jnp.mean(transition_step_batch.state_batch.score)
-        mean_scores = mean_scores.at[step].set(mean_score)
-        number_dead = jnp.sum(transition_step_batch.finished_batch)
-        numbers_dead = numbers_dead.at[step].set(number_dead)
-        
-    print(f"generated_batches={steps}/mean_reward={jnp.mean(mean_reward):0.2f}/deaths={jnp.mean(numbers_dead):0.2f}/{BATCH_SIZE}")
+    # generate transition steps and add to the replay buffer
+    rolling_key, _ = jrand.split(rolling_key, 2)
+    replay_buffer, game_state_batch, mean_rewards, numbers_dead, mean_scores = generate_replays(
+        replay_buffer,
+        model_params,
+        game_state_batch,
+        rolling_key,
+        steps,
+        epsilon=epsilon
+        )
+    print(f"generated_batches={steps}/mean_reward={jnp.mean(mean_rewards):0.2f}/deaths={jnp.mean(numbers_dead):0.2f}/{BATCH_SIZE}")
     print(f"mean_score={jnp.mean(mean_scores):0.2f}/epsilon={epsilon:0.4f}/lr={learning_rate:0.4f}")
     
     end_time = time.time()
