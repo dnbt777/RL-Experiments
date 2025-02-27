@@ -1,4 +1,5 @@
 ## dqn.py
+from custom_types import *
 from env import *
 
 from typing import NamedTuple, List
@@ -6,18 +7,10 @@ from functools import *
 import jax
 import jax.numpy as jnp
 
-class HiddenLayer(NamedTuple):
-  w: jax.Array
-  b: jax.Array
 
-class MLPParams(NamedTuple):
-  wi: jax.Array
-  bi: jax.Array
-  wo: jax.Array
-  bo: jax.Array
-  hidden_layers: List[HiddenLayer]
-
-MODEL_DTYPE=jnp.float32 # float16 would be better. or bf16
+FLOAT_DTYPE=jnp.float32 # float16 would be better memory-wise. or bf16 for both memory and speed. but currently the program breaks with them
+#NAT_INT_DTYPE=jnp.uint16
+#NEG_INT_DTYPE=jnp.int32
 
 
 def init_mlp_dqn(
@@ -26,7 +19,7 @@ def init_mlp_dqn(
     output_size: int,
     hidden_layers: int,
     hidden_layer_size: int,
-    dtype=MODEL_DTYPE
+    dtype=FLOAT_DTYPE
     ) -> MLPParams:
   initializer = jax.nn.initializers.xavier_uniform()
   return MLPParams(
@@ -72,7 +65,7 @@ def get_model_vision_batched(game_state_batch : GameStateBatch) -> jax.Array:
 def get_action_qualities_batched(
     model_params: MLPParams,
     game_state_batched: GameStateBatch,
-    dtype=MODEL_DTYPE
+    dtype=FLOAT_DTYPE
     ) -> jax.Array:
   model_vision = get_model_vision_batched(game_state_batched)
   model_input = jnp.array(model_vision, dtype=dtype)
@@ -82,13 +75,13 @@ def get_action_qualities_batched(
 
 # take_action(model_params, state)
 # returns: action
-@functools.partial(jax.jit, static_argnames=["dtype", "epsilon"])
+@functools.partial(jax.jit, static_argnames=["dtype"])
 def take_action_batched(
     model_params: MLPParams,
     game_state_batch: GameStateBatch,
     key: jax.Array,
-    epsilon: float = 1.0,
-    dtype=MODEL_DTYPE
+    epsilon: float,
+    dtype=FLOAT_DTYPE
     ) -> jax.Array:
   qualities_batch = get_action_qualities_batched(model_params, game_state_batch, dtype=dtype)
 
@@ -105,5 +98,5 @@ def take_action_batched(
 
 
 @jax.jit
-def mse(yhat, y):
+def mse(y, yhat):
   return jnp.mean((jnp.array(y) - jnp.array(yhat))**2)
